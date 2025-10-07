@@ -153,11 +153,21 @@ race conditions or (worse) malicious tampering.
 					ko.TrustedMaterial, err = root.NewTrustedRootFromPath(o.TrustedRootPath)
 					if err != nil {
 						return fmt.Errorf("loading trusted root: %w", err)
+					} else if tr, ok := ko.TrustedMaterial.(interface{ MarshalJSON() ([]byte, error) }); ok {
+						b, err := tr.MarshalJSON()
+						if err == nil {
+							fmt.Println(string(b))
+						}
 					}
 				} else {
 					ko.TrustedMaterial, err = cosign.TrustedRoot()
 					if err != nil {
 						ui.Warnf(context.Background(), "Could not fetch trusted_root.json from the TUF repository. Continuing with individual targets. Error from TUF: %v", err)
+					} else if tr, ok := ko.TrustedMaterial.(interface{ MarshalJSON() ([]byte, error) }); ok {
+						b, err := tr.MarshalJSON()
+						if err == nil {
+							fmt.Println(string(b))
+						}
 					}
 				}
 			}

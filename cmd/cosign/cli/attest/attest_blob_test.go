@@ -169,7 +169,7 @@ func TestAttestBlobCmdLocalKeyAndCert(t *testing.T) {
 				},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					keyOpts := options.KeyOpts{KeyRef: tc.keyref}
+					keyOpts := options.KeyOpts{KeyRef: tc.keyref, BundlePath: filepath.Join(td, "bundle.sigstore.json")}
 					if tc.newBundle {
 						keyOpts.NewBundleFormat = true
 					}
@@ -223,7 +223,7 @@ func TestAttestBlob(t *testing.T) {
 		t.Run(predicateType, func(t *testing.T) {
 			dssePath := filepath.Join(td, "dsse.intoto.jsonl")
 			at := AttestBlobCommand{
-				KeyOpts:         options.KeyOpts{KeyRef: keyRef},
+				KeyOpts:         options.KeyOpts{KeyRef: keyRef, BundlePath: filepath.Join(td, "bundle.sigstore.json")},
 				PredicatePath:   predicatePath,
 				PredicateType:   predicateType,
 				OutputSignature: dssePath,
@@ -295,7 +295,7 @@ func TestBadRekorEntryType(t *testing.T) {
 		t.Run(predicateType, func(t *testing.T) {
 			dssePath := filepath.Join(td, "dsse.intoto.jsonl")
 			at := AttestBlobCommand{
-				KeyOpts:         options.KeyOpts{KeyRef: keyRef},
+				KeyOpts:         options.KeyOpts{KeyRef: keyRef, BundlePath: filepath.Join(td, "bundle.sigstore.json")},
 				PredicatePath:   predicatePath,
 				PredicateType:   predicateType,
 				OutputSignature: dssePath,
@@ -334,7 +334,7 @@ func TestStatementPath(t *testing.T) {
 	statementPath := writeFile(t, td, statement, "statement.json")
 
 	at := AttestBlobCommand{
-		KeyOpts:        options.KeyOpts{KeyRef: keyRef},
+		KeyOpts:        options.KeyOpts{KeyRef: keyRef, BundlePath: filepath.Join(td, "bundle.sigstore.json")},
 		StatementPath:  statementPath,
 		RekorEntryType: "dsse",
 	}

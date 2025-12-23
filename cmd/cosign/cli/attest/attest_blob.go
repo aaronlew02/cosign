@@ -164,33 +164,31 @@ func (c *AttestBlobCommand) Exec(ctx context.Context, artifactPath string) error
 		signedPayload.Bundle = cbundle.EntryToBundle(bundleComponents.RekorEntry)
 	}
 
-	if c.BundlePath != "" {
-		var contents []byte
-		if c.NewBundleFormat {
-			pubKey, err := sv.PublicKey()
-			if err != nil {
-				return err
-			}
-
-			contents, err = cbundle.MakeNewBundle(pubKey, bundleComponents.RekorEntry, payload, bundleComponents.SignedPayload, bundleComponents.SignerBytes, bundleComponents.TimestampBytes)
-			if err != nil {
-				return err
-			}
-		} else {
-			signedPayload.Base64Signature = base64.StdEncoding.EncodeToString(bundleComponents.SignedPayload)
-			signedPayload.Cert = base64.StdEncoding.EncodeToString(bundleComponents.SignerBytes)
-
-			contents, err = json.Marshal(signedPayload)
-			if err != nil {
-				return err
-			}
+	var contents []byte
+	if c.NewBundleFormat {
+		pubKey, err := sv.PublicKey()
+		if err != nil {
+			return err
 		}
 
-		if err := os.WriteFile(c.BundlePath, contents, 0600); err != nil {
-			return fmt.Errorf("create bundle file: %w", err)
+		contents, err = cbundle.MakeNewBundle(pubKey, bundleComponents.RekorEntry, payload, bundleComponents.SignedPayload, bundleComponents.SignerBytes, bundleComponents.TimestampBytes)
+		if err != nil {
+			return err
 		}
-		fmt.Fprintln(os.Stderr, "Bundle wrote in the file ", c.BundlePath)
+	} else {
+		signedPayload.Base64Signature = base64.StdEncoding.EncodeToString(bundleComponents.SignedPayload)
+		signedPayload.Cert = base64.StdEncoding.EncodeToString(bundleComponents.SignerBytes)
+
+		contents, err = json.Marshal(signedPayload)
+		if err != nil {
+			return err
+		}
 	}
+
+	if err := os.WriteFile(c.BundlePath, contents, 0600); err != nil {
+		return fmt.Errorf("create bundle file: %w", err)
+	}
+	fmt.Fprintln(os.Stderr, "Bundle wrote in the file ", c.BundlePath)
 
 	if c.OutputSignature != "" {
 		if err := os.WriteFile(c.OutputSignature, bundleComponents.SignedPayload, 0600); err != nil {

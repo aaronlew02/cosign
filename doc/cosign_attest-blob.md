@@ -9,25 +9,25 @@ cosign attest-blob [flags]
 ### Examples
 
 ```
-  cosign attest-blob --key <key path>|<kms uri> [--predicate <path>] [--a key=value] [--f] [--r] <BLOB uri>
+  cosign attest-blob --key <key path>|<kms uri> [--predicate <path>] [--a key=value] [--f] [--r] <BLOB uri> --bundle <file>
 
   # attach an attestation to a blob with a local key pair file and print the attestation
-  cosign attest-blob --predicate <FILE> --type <TYPE> --key cosign.key --output-attestation <path> <BLOB>
+  cosign attest-blob --predicate <FILE> --type <TYPE> --key cosign.key --output-attestation <path> <BLOB> --bundle <file>
 
   # attach an attestation to a blob with a key pair stored in Azure Key Vault
-  cosign attest-blob --predicate <FILE> --type <TYPE> --key azurekms://[VAULT_NAME][VAULT_URI]/[KEY] <BLOB>
+  cosign attest-blob --predicate <FILE> --type <TYPE> --key azurekms://[VAULT_NAME][VAULT_URI]/[KEY] <BLOB> --bundle <file>
 
   # attach an attestation to a blob with a key pair stored in AWS KMS
-  cosign attest-blob --predicate <FILE> --type <TYPE> --key awskms://[ENDPOINT]/[ID/ALIAS/ARN] <BLOB>
+  cosign attest-blob --predicate <FILE> --type <TYPE> --key awskms://[ENDPOINT]/[ID/ALIAS/ARN] <BLOB> --bundle <file>
 
   # attach an attestation to a blob with a key pair stored in Google Cloud KMS
-  cosign attest-blob --predicate <FILE> --type <TYPE> --key gcpkms://projects/[PROJECT]/locations/global/keyRings/[KEYRING]/cryptoKeys/[KEY]/versions/[VERSION] <BLOB>
+  cosign attest-blob --predicate <FILE> --type <TYPE> --key gcpkms://projects/[PROJECT]/locations/global/keyRings/[KEYRING]/cryptoKeys/[KEY]/versions/[VERSION] <BLOB> --bundle <file>
 
   # attach an attestation to a blob with a key pair stored in Hashicorp Vault
-  cosign attest-blob --predicate <FILE> --type <TYPE> --key hashivault://[KEY] <BLOB>
+  cosign attest-blob --predicate <FILE> --type <TYPE> --key hashivault://[KEY] <BLOB> --bundle <file>
 
   # supply attestation via stdin
-  echo <PAYLOAD> | cosign attest-blob --predicate - --yes
+  echo <PAYLOAD> | cosign attest-blob --predicate - --yes --bundle <file>
 ```
 
 ### Options

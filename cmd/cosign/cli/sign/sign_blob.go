@@ -146,68 +146,66 @@ func SignBlobCmd(ctx context.Context, ro *options.RootOptions, ko options.KeyOpt
 	}
 
 	// if bundle is specified, just do that and ignore the rest
-	if ko.BundlePath != "" {
-		var contents []byte
-		if ko.NewBundleFormat {
-			// Determine if signature is certificate or not
-			var hint string
-			var rawCert []byte
+	var contents []byte
+	if ko.NewBundleFormat {
+		// Determine if signature is certificate or not
+		var hint string
+		var rawCert []byte
 
-			cert, err := cryptoutils.UnmarshalCertificatesFromPEM(signer)
-			if err != nil || len(cert) == 0 {
-				pubKey, err := sv.PublicKey()
-				if err != nil {
-					return nil, err
-				}
-				pkixPubKey, err := x509.MarshalPKIXPublicKey(pubKey)
-				if err != nil {
-					return nil, err
-				}
-				hashedBytes := sha256.Sum256(pkixPubKey)
-				hint = base64.StdEncoding.EncodeToString(hashedBytes[:])
-			} else {
-				rawCert = cert[0].Raw
-			}
-
-			bundle, err := cbundle.MakeProtobufBundle(hint, rawCert, rekorEntry, timestampBytes)
+		cert, err := cryptoutils.UnmarshalCertificatesFromPEM(signer)
+		if err != nil || len(cert) == 0 {
+			pubKey, err := sv.PublicKey()
 			if err != nil {
 				return nil, err
 			}
-
-			bundle.Content = &protobundle.Bundle_MessageSignature{
-				MessageSignature: &protocommon.MessageSignature{
-					MessageDigest: &protocommon.HashOutput{
-						Algorithm: hashFuncToProtoBundle(payload.HashFunc()),
-						Digest:    digest,
-					},
-					Signature: sig,
-				},
-			}
-
-			contents, err = protojson.Marshal(bundle)
+			pkixPubKey, err := x509.MarshalPKIXPublicKey(pubKey)
 			if err != nil {
 				return nil, err
 			}
+			hashedBytes := sha256.Sum256(pkixPubKey)
+			hint = base64.StdEncoding.EncodeToString(hashedBytes[:])
 		} else {
-			signedPayload.Base64Signature = base64.StdEncoding.EncodeToString(sig)
-
-			certBytes, err := extractCertificate(ctx, sv)
-			if err != nil {
-				return nil, err
-			}
-			signedPayload.Cert = base64.StdEncoding.EncodeToString(certBytes)
-
-			contents, err = json.Marshal(signedPayload)
-			if err != nil {
-				return nil, err
-			}
+			rawCert = cert[0].Raw
 		}
 
-		if err := os.WriteFile(ko.BundlePath, contents, 0600); err != nil {
-			return nil, fmt.Errorf("create bundle file: %w", err)
+		bundle, err := cbundle.MakeProtobufBundle(hint, rawCert, rekorEntry, timestampBytes)
+		if err != nil {
+			return nil, err
 		}
-		ui.Infof(ctx, "Wrote bundle to file %s", ko.BundlePath)
+
+		bundle.Content = &protobundle.Bundle_MessageSignature{
+			MessageSignature: &protocommon.MessageSignature{
+				MessageDigest: &protocommon.HashOutput{
+					Algorithm: hashFuncToProtoBundle(payload.HashFunc()),
+					Digest:    digest,
+				},
+				Signature: sig,
+			},
+		}
+
+		contents, err = protojson.Marshal(bundle)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		signedPayload.Base64Signature = base64.StdEncoding.EncodeToString(sig)
+
+		certBytes, err := extractCertificate(ctx, sv)
+		if err != nil {
+			return nil, err
+		}
+		signedPayload.Cert = base64.StdEncoding.EncodeToString(certBytes)
+
+		contents, err = json.Marshal(signedPayload)
+		if err != nil {
+			return nil, err
+		}
 	}
+
+	if err := os.WriteFile(ko.BundlePath, contents, 0600); err != nil {
+		return nil, fmt.Errorf("create bundle file: %w", err)
+	}
+	ui.Infof(ctx, "Wrote bundle to file %s", ko.BundlePath)
 
 	if outputSignature != "" {
 		var bts = sig

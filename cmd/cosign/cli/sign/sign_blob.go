@@ -19,25 +19,19 @@ import (
 	"context"
 	"crypto"
 	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/sigstore/cosign/v3/cmd/cosign/cli/options"
 	"github.com/sigstore/cosign/v3/cmd/cosign/cli/signcommon"
 	internal "github.com/sigstore/cosign/v3/internal/pkg/cosign"
 	"github.com/sigstore/cosign/v3/internal/ui"
-	"github.com/sigstore/cosign/v3/pkg/cosign"
 	cbundle "github.com/sigstore/cosign/v3/pkg/cosign/bundle"
 	protobundle "github.com/sigstore/protobuf-specs/gen/pb-go/bundle/v1"
 	protocommon "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
-	prototrustroot "github.com/sigstore/protobuf-specs/gen/pb-go/trustroot/v1"
-	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/sign"
 	"github.com/sigstore/sigstore/pkg/signature"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -62,7 +56,6 @@ func SignBlobCmd(ctx context.Context, ro *options.RootOptions, ko options.KeyOpt
 	ctx, cancel := context.WithTimeout(ctx, ro.Timeout)
 	defer cancel()
 
-	// TODO - this does not take ko.SigningConfig into account
 	if !tlogUpload {
 		// To maintain backwards compatibility with older cosign versions,
 		// we do not use ed25519ph for ed25519 keys when the signatures are not
@@ -97,62 +90,6 @@ func SignBlobCmd(ctx context.Context, ro *options.RootOptions, ko options.KeyOpt
 		ui.Infof(ctx, "Continuing with non SHA256 hash function and old bundle format")
 	}
 
-	// Signing config construction logic:
-	if ko.SigningConfig == nil {
-		ui.Infof(ctx, "DEBUG: Signing config is nil")
-		var fulcioServices []root.Service
-		if ko.FulcioURL != "" {
-			fulcioServices = append(fulcioServices, root.Service{
-				URL:                 ko.FulcioURL,
-				MajorAPIVersion:     1,
-				ValidityPeriodStart: time.Now(),
-			})
-		}
-
-		var rekorServices []root.Service
-		var rekorConfig root.ServiceConfiguration
-		if ko.RekorURL != "" && shouldUpload {
-			rekorServices = append(rekorServices, root.Service{
-				URL:                 ko.RekorURL,
-				MajorAPIVersion:     ko.RekorVersion,
-				ValidityPeriodStart: time.Now(),
-			})
-			rekorConfig = root.ServiceConfiguration{
-				Selector: prototrustroot.ServiceSelector_ANY,
-				Count:    1,
-			}
-		}
-
-		var tsaServices []root.Service
-		var tsaConfig root.ServiceConfiguration
-		if ko.TSAServerURL != "" {
-			tsaServices = append(tsaServices, root.Service{
-				URL:                 ko.TSAServerURL,
-				MajorAPIVersion:     1,
-				ValidityPeriodStart: time.Now(),
-			})
-			tsaConfig = root.ServiceConfiguration{
-				Selector: prototrustroot.ServiceSelector_ANY,
-				Count:    1,
-			}
-		}
-
-		var err error
-		ko.SigningConfig, err = root.NewSigningConfig(
-			root.SigningConfigMediaType02,
-			fulcioServices,
-			nil,
-			rekorServices,
-			rekorConfig,
-			tsaServices,
-			tsaConfig,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("creating signing config: %w", err)
-		}
-		ui.Infof(ctx, "DEBUG: Created signing config: %v", ko.SigningConfig)
-	}
-
 	// Unified signing path using sigstore-go backend
 	data, err := io.ReadAll(&payload)
 	if err != nil {
@@ -161,10 +98,28 @@ func SignBlobCmd(ctx context.Context, ro *options.RootOptions, ko options.KeyOpt
 	content := &sign.PlainData{
 		Data: data,
 	}
-	ui.Infof(ctx, "DEBUG: Using signing config: %v", ko.SigningConfig)
+
 	bundleBytes, err := cbundle.SignData(ctx, content, keypair, idToken, certBytes, ko.SigningConfig, ko.TrustedMaterial)
 	if err != nil {
 		return nil, fmt.Errorf("signing bundle: %w", err)
+	}
+
+	// 1. Write bundle to file if requested
+	if ko.BundlePath != "" {
+		var contents []byte
+		if ko.NewBundleFormat {
+			contents = bundleBytes
+		} else {
+			contents, err = signcommon.NewLegacyBundleFromProtoBundle(ctx, bundleBytes)
+			if err != nil {
+				return nil, fmt.Errorf("creating legacy bundle: %w", err)
+			}
+		}
+
+		if err := os.WriteFile(ko.BundlePath, contents, 0600); err != nil {
+			return nil, fmt.Errorf("create bundle file: %w", err)
+		}
+		ui.Infof(ctx, "Wrote bundle to file %s", ko.BundlePath)
 	}
 
 	// Extract components for supplemental/detached outputs
@@ -175,53 +130,10 @@ func SignBlobCmd(ctx context.Context, ro *options.RootOptions, ko options.KeyOpt
 
 	sig := bundle.GetMessageSignature().GetSignature()
 	// Get cert from verification material
-	var extractedCert *protocommon.X509Certificate
+	var cert *protocommon.X509Certificate
 	if bundle.VerificationMaterial.GetCertificate() != nil {
-		extractedCert = bundle.VerificationMaterial.GetCertificate()
+		cert = bundle.VerificationMaterial.GetCertificate()
 	}
-
-	// 1. Write bundle to file if requested
-	// if ko.BundlePath != "" { <-- PREVIOUS PR MANDATES THIS IN CLI
-		var contents []byte
-		if ko.NewBundleFormat {
-			contents = bundleBytes
-		} else {
-			// Convert to legacy LocalSignedPayload
-			signedPayload := cosign.LocalSignedPayload{
-				Base64Signature: base64.StdEncoding.EncodeToString(sig),
-			}
-			if extractedCert != nil {
-				pemBlock := &pem.Block{
-					Type:  "CERTIFICATE",
-					Bytes: extractedCert.GetRawBytes(),
-				}
-				certPem := pem.EncodeToMemory(pemBlock)
-				signedPayload.Cert = base64.StdEncoding.EncodeToString(certPem)
-			}
-			if len(bundle.GetVerificationMaterial().GetTlogEntries()) > 0 {
-				entry := bundle.GetVerificationMaterial().GetTlogEntries()[0]
-				signedPayload.Bundle = &cbundle.RekorBundle{
-					SignedEntryTimestamp: entry.GetInclusionPromise().GetSignedEntryTimestamp(),
-					Payload: cbundle.RekorPayload{
-						Body:           entry.GetCanonicalizedBody(),
-						IntegratedTime: entry.GetIntegratedTime(),
-						LogIndex:       entry.GetLogIndex(),
-						LogID:          hex.EncodeToString(entry.GetLogId().GetKeyId()),
-					},
-				}
-			}
-			contents, err = json.Marshal(signedPayload)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		if err := os.WriteFile(ko.BundlePath, contents, 0600); err != nil {
-			return nil, fmt.Errorf("create bundle file: %w", err)
-		}
-		ui.Infof(ctx, "Wrote bundle to file %s", ko.BundlePath)
-	// }
-
 	// 2. Handle explicit signature file output or stdout
 	if outputSignature != "" {
 		bts := sig
@@ -246,11 +158,11 @@ func SignBlobCmd(ctx context.Context, ro *options.RootOptions, ko options.KeyOpt
 	}
 
 	// 3. Handle explicit certificate file output
-	if outputCertificate != "" && extractedCert != nil {
-		bts := extractedCert.GetRawBytes()
+	if outputCertificate != "" && cert != nil {
+		bts := cert.GetRawBytes()
 		pemBlock := &pem.Block{
 			Type:  "CERTIFICATE",
-			Bytes: extractedCert.GetRawBytes(),
+			Bytes: cert.GetRawBytes(),
 		}
 		certPem := pem.EncodeToMemory(pemBlock)
 		if b64 {

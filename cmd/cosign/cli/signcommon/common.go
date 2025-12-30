@@ -18,11 +18,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -44,7 +47,10 @@ import (
 	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
 	sigs "github.com/sigstore/cosign/v3/pkg/signature"
 	"github.com/sigstore/cosign/v3/pkg/types"
+	protobundle "github.com/sigstore/protobuf-specs/gen/pb-go/bundle/v1"
 	pb_go_v1 "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
+	protocommon "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
+	prototrustroot "github.com/sigstore/protobuf-specs/gen/pb-go/trustroot/v1"
 	rekorclient "github.com/sigstore/rekor/pkg/generated/client"
 	"github.com/sigstore/rekor/pkg/generated/models"
 	"github.com/sigstore/sigstore-go/pkg/root"
@@ -53,6 +59,7 @@ import (
 	"github.com/sigstore/sigstore/pkg/signature"
 	"github.com/sigstore/sigstore/pkg/signature/dsse"
 	signatureoptions "github.com/sigstore/sigstore/pkg/signature/options"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // SignerVerifier contains keys or certs to sign and verify.
@@ -509,9 +516,28 @@ func WriteBundle(ctx context.Context, sv *SignerVerifier, rekorEntry *models.Log
 
 // WriteNewBundleWithSigningConfig uses signing config and trusted root to fetch responses from services for the bundle and writes the bundle to the OCI remote layer.
 func WriteNewBundleWithSigningConfig(ctx context.Context, ko options.KeyOpts, cert, certChain string, bundleOpts CommonBundleOpts, signingConfig *root.SigningConfig, trustedMaterial root.TrustedMaterial) error {
+	bundle, err := NewBundleWithSigningConfig(ctx, ko, cert, certChain, bundleOpts, signingConfig, trustedMaterial)
+	if err != nil {
+		return err
+	}
+
+	if bundleOpts.BundlePath != "" {
+		if err := os.WriteFile(bundleOpts.BundlePath, bundle, 0600); err != nil {
+			return fmt.Errorf("creating bundle file: %w", err)
+		}
+		ui.Infof(ctx, "Wrote bundle to file %s", bundleOpts.BundlePath)
+		return nil // TODO (separate issue): Why prevent upload if bundle path is specified?
+	}
+	if !bundleOpts.Upload {
+		return nil
+	}
+	return ociremote.WriteAttestationNewBundleFormat(bundleOpts.Digest, bundle, bundleOpts.PredicateType, bundleOpts.OCIRemoteOpts...)
+}
+
+func NewBundleWithSigningConfig(ctx context.Context, ko options.KeyOpts, cert, certChain string, bundleOpts CommonBundleOpts, signingConfig *root.SigningConfig, trustedMaterial root.TrustedMaterial) ([]byte, error) {
 	keypair, _, certBytes, idToken, err := GetKeypairAndToken(ctx, ko, cert, certChain)
 	if err != nil {
-		return fmt.Errorf("getting keypair and token: %w", err)
+		return nil, fmt.Errorf("getting keypair and token: %w", err)
 	}
 
 	content := &sign.DSSEData{
@@ -520,20 +546,102 @@ func WriteNewBundleWithSigningConfig(ctx context.Context, ko options.KeyOpts, ce
 	}
 	bundle, err := cbundle.SignData(ctx, content, keypair, idToken, certBytes, signingConfig, trustedMaterial)
 	if err != nil {
-		return fmt.Errorf("signing bundle: %w", err)
+		return nil, fmt.Errorf("signing bundle: %w", err)
+	}
+	return bundle, nil
+}
+
+/* TODO: May not go forward with this extraction.
+func SignBlob_NewBundleWithSigningConfig(ctx context.Context, ko options.KeyOpts, cert, certChain string, signingConfig *root.SigningConfig, trustedMaterial root.TrustedMaterial, payload) ([]byte, error) {
+	keypair, _, certBytes, idToken, err := GetKeypairAndToken(ctx, ko, cert, certChain)
+	if err != nil {
+		return nil, fmt.Errorf("getting keypair and token: %w", err)
 	}
 
-	if bundleOpts.BundlePath != "" {
-		if err := os.WriteFile(bundleOpts.BundlePath, bundle, 0600); err != nil {
-			return fmt.Errorf("creating bundle file: %w", err)
+	hashFunction := protoHashAlgoToHash(keypair.GetHashAlgorithm())
+	payload, closePayload, err := getPayload(ctx, payloadPath, hashFunction)
+	if err != nil {
+		return nil, fmt.Errorf("getting payload: %w", err)
+	}
+	defer closePayload()
+
+	if hashFunction != crypto.SHA256 && !ko.NewBundleFormat && (shouldUpload || (!ko.Sk && ko.KeyRef == "")) {
+		ui.Infof(ctx, "Non SHA256 hash function is not supported for old bundle format. Use --new-bundle-format to use the new bundle format or use different signing key/algorithm.")
+		if !ko.SkipConfirmation {
+			if err := ui.ConfirmContinue(ctx); err != nil {
+				return nil, err
+			}
 		}
-		ui.Infof(ctx, "Wrote bundle to file %s", bundleOpts.BundlePath)
-		return nil
+		ui.Infof(ctx, "Continuing with non SHA256 hash function and old bundle format")
 	}
-	if !bundleOpts.Upload {
-		return nil
+
+	// Unified signing path using sigstore-go backend
+	data, err := io.ReadAll(&payload)
+	if err != nil {
+		return nil, fmt.Errorf("reading payload: %w", err)
 	}
-	return ociremote.WriteAttestationNewBundleFormat(bundleOpts.Digest, bundle, bundleOpts.PredicateType, bundleOpts.OCIRemoteOpts...)
+	content := &sign.PlainData{
+		Data: data,
+	}
+	ui.Infof(ctx, "DEBUG: Using signing config: %v", ko.SigningConfig)
+	bundleBytes, err := cbundle.SignData(ctx, content, keypair, idToken, certBytes, ko.SigningConfig, ko.TrustedMaterial)
+	if err != nil {
+		return nil, fmt.Errorf("signing bundle: %w", err)
+	}
+	return bundleBytes, nil
+}
+*/
+
+func NewLegacyBundleFromProtoBundle(ctx context.Context, bundleBytes []byte) ([]byte, error) {
+	var bundle protobundle.Bundle
+	if err := protojson.Unmarshal(bundleBytes, &bundle); err != nil {
+		return nil, fmt.Errorf("unmarshalling bundle: %w", err)
+	}
+
+	var sig []byte
+	if bundle.GetMessageSignature() != nil {
+		sig = bundle.GetMessageSignature().GetSignature()
+	} else if envelope := bundle.GetDsseEnvelope(); envelope != nil {
+		if len(envelope.GetSignatures()) > 0 {
+			sig = envelope.GetSignatures()[0].Sig
+		}
+	}
+
+	// Get cert from verification material
+	var cert *protocommon.X509Certificate
+	if bundle.VerificationMaterial.GetCertificate() != nil {
+		cert = bundle.VerificationMaterial.GetCertificate()
+	}
+	
+	// Convert to legacy LocalSignedPayload
+	signedPayload := cosign.LocalSignedPayload{
+		Base64Signature: base64.StdEncoding.EncodeToString(sig),
+	}
+	if cert != nil {
+		pemBlock := &pem.Block{
+				Type:  "CERTIFICATE",
+				Bytes: cert.GetRawBytes(),
+			}
+			certPem := pem.EncodeToMemory(pemBlock)
+			signedPayload.Cert = base64.StdEncoding.EncodeToString(certPem)
+	}
+	if len(bundle.GetVerificationMaterial().GetTlogEntries()) > 0 {
+			entry := bundle.GetVerificationMaterial().GetTlogEntries()[0]
+			signedPayload.Bundle = &cbundle.RekorBundle{
+				SignedEntryTimestamp: entry.GetInclusionPromise().GetSignedEntryTimestamp(),
+				Payload: cbundle.RekorPayload{
+						Body:           entry.GetCanonicalizedBody(),
+						IntegratedTime: entry.GetIntegratedTime(),
+						LogIndex:       entry.GetLogIndex(),
+						LogID:          hex.EncodeToString(entry.GetLogId().GetKeyId()),
+					},
+			}
+	}
+	contents, err := json.Marshal(signedPayload)
+	if err != nil {
+		return nil, err
+	}
+	return contents, nil
 }
 
 type bundleComponents struct {
@@ -626,7 +734,7 @@ func ParseSignatureAlgorithmFlag(signingAlgorithm string) (pb_go_v1.PublicKeyDet
 
 // LoadTrustedMaterialAndSigningConfig loads the trusted material and signing config from the given options.
 func LoadTrustedMaterialAndSigningConfig(ctx context.Context, ko *options.KeyOpts, useSigningConfig bool, signingConfigPath string,
-	rekorURL, fulcioURL, oidcIssuer, tsaServerURL, trustedRootPath string,
+	rekorURL string, rekorVersion uint32, fulcioURL, oidcIssuer, tsaServerURL, trustedRootPath string,
 	tlogUpload bool, newBundleFormat bool, bundlePath string, keyRef string, issueCertificate bool,
 	output, outputAttestation, outputCertificate, outputPayload, outputSignature string) error {
 	var err error
@@ -645,6 +753,13 @@ func LoadTrustedMaterialAndSigningConfig(ctx context.Context, ko *options.KeyOpt
 	if (useSigningConfig || signingConfigPath != "") && !newBundleFormat && bundlePath == "" {
 		return fmt.Errorf("must provide --new-bundle-format or --bundle where applicable with --signing-config or --use-signing-config")
 	}
+	if rekorVersion != 1 && rekorVersion != 2 {
+		return fmt.Errorf("rekor version %d is not supported", rekorVersion)
+	}
+	if !newBundleFormat && rekorVersion == 2 {
+		return fmt.Errorf("rekor v2 requires --new-bundle-format")
+	}
+	// TODO: Enforce a TSA when rekor v2 is enabled?
 	// Fetch a trusted root when:
 	// * requesting a certificate and no CT log key is provided to verify an SCT
 	// * using a signing config and signing using sigstore-go
@@ -673,6 +788,12 @@ func LoadTrustedMaterialAndSigningConfig(ctx context.Context, ko *options.KeyOpt
 			return fmt.Errorf("error getting signing config from TUF: %w", err)
 		}
 	}
+	if !useSigningConfig {
+		ko.SigningConfig, err = NewSigningConfigFromURLs(ctx, fulcioURL, rekorURL, rekorVersion, oidcIssuer, tsaServerURL, tlogUpload)
+		if err != nil {
+			return fmt.Errorf("error creating signing config from URLs: %w", err)
+		}
+	}
 
 	// TODO: Remove deprecated output flags warning in a future release (when flags are removed)
 	if newBundleFormat && outputSignature != "" {
@@ -692,4 +813,73 @@ func LoadTrustedMaterialAndSigningConfig(ctx context.Context, ko *options.KeyOpt
 	}
 
 	return nil
+}
+
+func NewSigningConfigFromURLs(ctx context.Context, fulcioURL, rekorURL string, rekorVersion uint32, oidcIssuer, tsaServerURL string, tlogUpload bool) (*root.SigningConfig, error) {
+	ui.Infof(ctx, "DEBUG: Creating signing config from scratch")
+	var fulcioServices []root.Service
+	if fulcioURL != "" {
+		fulcioServices = append(fulcioServices, root.Service{
+			URL:                 fulcioURL,
+			MajorAPIVersion:     1,
+			ValidityPeriodStart: time.Now(),
+		})
+	}
+
+	var rekorServices []root.Service
+	var rekorConfig root.ServiceConfiguration
+	if rekorURL != "" && tlogUpload {
+		rekorServices = append(rekorServices, root.Service{
+			URL:                 rekorURL,
+			MajorAPIVersion:     rekorVersion,
+			ValidityPeriodStart: time.Now(),
+		})
+		rekorConfig = root.ServiceConfiguration{
+			Selector: prototrustroot.ServiceSelector_ANY,
+			Count:    1,
+		}
+	}
+
+	var oidcServices []root.Service
+	if oidcIssuer != "" {
+		oidcServices = append(oidcServices, root.Service{
+			URL:                 oidcIssuer,
+			MajorAPIVersion:     1,
+			ValidityPeriodStart: time.Now(),
+		})
+	}
+
+	// TODO: There's no fallback URL for TSA!
+	// So we might have to enforce an input here when Rekor version is 2.
+	var tsaServices []root.Service
+	var tsaConfig root.ServiceConfiguration
+	if tsaServerURL != "" {
+		tsaServices = append(tsaServices, root.Service{
+			URL:                 tsaServerURL,
+			MajorAPIVersion:     1,
+			ValidityPeriodStart: time.Now(),
+		})
+		tsaConfig = root.ServiceConfiguration{
+			Selector: prototrustroot.ServiceSelector_ANY,
+			Count:    1,
+		}
+	}
+
+	var sc *root.SigningConfig
+	var err error
+	sc, err = root.NewSigningConfig(
+		root.SigningConfigMediaType02,
+		fulcioServices,
+		oidcServices,
+		rekorServices,
+		rekorConfig,
+		tsaServices,
+		tsaConfig,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating signing config: %w", err)
+	}
+	ui.Infof(ctx, "DEBUG: Created signing config: %v", sc)
+
+	return sc, nil
 }

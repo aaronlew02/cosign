@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"context"
 	"crypto"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"os"
@@ -32,11 +32,10 @@ import (
 	intotov1 "github.com/in-toto/attestation/go/v1"
 	"github.com/sigstore/cosign/v3/cmd/cosign/cli/options"
 	"github.com/sigstore/cosign/v3/cmd/cosign/cli/signcommon"
-	"github.com/sigstore/cosign/v3/pkg/cosign"
 	"github.com/sigstore/cosign/v3/pkg/cosign/attestation"
-	cbundle "github.com/sigstore/cosign/v3/pkg/cosign/bundle"
-	"github.com/sigstore/sigstore/pkg/cryptoutils"
+	protobundle "github.com/sigstore/protobuf-specs/gen/pb-go/bundle/v1"
 	"github.com/sigstore/sigstore/pkg/signature"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // nolint
@@ -146,43 +145,19 @@ func (c *AttestBlobCommand) Exec(ctx context.Context, artifactPath string) error
 		BundlePath: c.BundlePath,
 	}
 
-	if c.SigningConfig != nil {
-		return signcommon.WriteNewBundleWithSigningConfig(ctx, c.KeyOpts, c.CertPath, c.CertChainPath, bundleOpts, c.SigningConfig, c.TrustedMaterial)
-	}
-
-	bundleComponents, closeSV, err := signcommon.GetBundleComponents(ctx, c.CertPath, c.CertChainPath, c.KeyOpts, false, c.TlogUpload, payload, nil, c.RekorEntryType)
+	bundleBytes, err := signcommon.NewBundleWithSigningConfig(ctx, c.KeyOpts, c.CertPath, c.CertChainPath, bundleOpts, c.SigningConfig, c.TrustedMaterial)
 	if err != nil {
-		return fmt.Errorf("getting bundle components: %w", err)
-	}
-	defer closeSV()
-
-	sv := bundleComponents.SV
-
-	signedPayload := cosign.LocalSignedPayload{}
-
-	if bundleComponents.RekorEntry != nil {
-		signedPayload.Bundle = cbundle.EntryToBundle(bundleComponents.RekorEntry)
+		return fmt.Errorf("creating bundle: %w", err)
 	}
 
-	if c.BundlePath != "" {
+	// if c.BundlePath != "" { // PREVIOUS PR MANDATES THIS
 		var contents []byte
 		if c.NewBundleFormat {
-			pubKey, err := sv.PublicKey()
-			if err != nil {
-				return err
-			}
-
-			contents, err = cbundle.MakeNewBundle(pubKey, bundleComponents.RekorEntry, payload, bundleComponents.SignedPayload, bundleComponents.SignerBytes, bundleComponents.TimestampBytes)
-			if err != nil {
-				return err
-			}
+			contents = bundleBytes
 		} else {
-			signedPayload.Base64Signature = base64.StdEncoding.EncodeToString(bundleComponents.SignedPayload)
-			signedPayload.Cert = base64.StdEncoding.EncodeToString(bundleComponents.SignerBytes)
-
-			contents, err = json.Marshal(signedPayload)
+			contents, err = signcommon.NewLegacyBundleFromProtoBundle(ctx, bundleBytes)
 			if err != nil {
-				return err
+				return fmt.Errorf("creating legacy bundle: %w", err)
 			}
 		}
 
@@ -190,15 +165,40 @@ func (c *AttestBlobCommand) Exec(ctx context.Context, artifactPath string) error
 			return fmt.Errorf("create bundle file: %w", err)
 		}
 		fmt.Fprintln(os.Stderr, "Bundle wrote in the file ", c.BundlePath)
+	// }
+
+	// Extract components for supplemental/detached outputs
+	var bundle protobundle.Bundle
+	if err := protojson.Unmarshal(bundleBytes, &bundle); err != nil {
+		return fmt.Errorf("unmarshalling bundle: %w", err)
+	}
+
+	sig := bundle.GetDsseEnvelope().GetSignatures()
+	if len(sig) == 0 {
+		return fmt.Errorf("no signatures in bundle")
+	}
+
+	envelopeBytes, err := protojson.Marshal(bundle.GetDsseEnvelope())
+	if err != nil {
+		return fmt.Errorf("marshalling DSSE envelope: %w", err)
+	}
+	// Get cert from verification material
+	var certPEM []byte
+	if c := bundle.VerificationMaterial.GetCertificate(); c != nil {
+		pemBlock := &pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: c.GetRawBytes(),
+		}
+		certPEM = pem.EncodeToMemory(pemBlock)
 	}
 
 	if c.OutputSignature != "" {
-		if err := os.WriteFile(c.OutputSignature, bundleComponents.SignedPayload, 0600); err != nil {
+		if err := os.WriteFile(c.OutputSignature, envelopeBytes, 0600); err != nil {
 			return fmt.Errorf("create signature file: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Signature written in %s\n", c.OutputSignature)
 	} else {
-		fmt.Fprintln(os.Stdout, string(bundleComponents.SignedPayload))
+		fmt.Fprintln(os.Stdout, string(envelopeBytes))
 	}
 
 	if c.OutputAttestation != "" {
@@ -209,19 +209,11 @@ func (c *AttestBlobCommand) Exec(ctx context.Context, artifactPath string) error
 	}
 
 	if c.OutputCertificate != "" {
-		cert, err := cryptoutils.UnmarshalCertificatesFromPEM(bundleComponents.SignerBytes)
-		// signer is a certificate
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Could not output signer certificate. Was a certificate used? ", err)
-			return nil
-
-		}
-		if len(cert) != 1 {
-			fmt.Fprintln(os.Stderr, "Could not output signer certificate. Expected a single certificate")
+		if certPEM == nil {
+			fmt.Fprintln(os.Stderr, "Could not output signer certificate. Was a certificate used?")
 			return nil
 		}
-		bts := bundleComponents.SignerBytes
-		if err := os.WriteFile(c.OutputCertificate, bts, 0600); err != nil {
+		if err := os.WriteFile(c.OutputCertificate, certPEM, 0600); err != nil {
 			return fmt.Errorf("create certificate file: %w", err)
 		}
 		fmt.Fprintln(os.Stderr, "Certificate written to file ", c.OutputCertificate)

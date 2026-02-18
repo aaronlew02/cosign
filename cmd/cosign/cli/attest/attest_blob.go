@@ -34,6 +34,7 @@ import (
 	"github.com/sigstore/cosign/v3/pkg/cosign/attestation"
 	cbundle "github.com/sigstore/cosign/v3/pkg/cosign/bundle"
 	protobundle "github.com/sigstore/protobuf-specs/gen/pb-go/bundle/v1"
+	pb_go_v1 "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
 	"github.com/sigstore/sigstore/pkg/signature"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -163,9 +164,13 @@ func (c *AttestBlobCommand) Exec(ctx context.Context, artifactPath string) error
 		return fmt.Errorf("unmarshalling bundle: %w", err)
 	}
 
-	sig, cert, rekorEntry, timestamp, errStr := signcommon.ExtractElementsFromProtoBundle(&protoBundle)
+	sig, certs, rekorEntry, timestamp, errStr := signcommon.ExtractElementsFromProtoBundle(&protoBundle)
 	if errStr != nil {
 		return errStr
+	}
+	var cert *pb_go_v1.X509Certificate
+	if len(certs) > 0 {
+		cert = certs[0]
 	}
 
 	if c.BundlePath != "" && !c.NewBundleFormat {

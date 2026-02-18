@@ -560,6 +560,35 @@ func WriteNewBundleWithSigningConfig(ctx context.Context, ko options.KeyOpts, ce
 	return bundle, nil
 }
 
+// NewBundleWithSigningConfig uses signing config and trusted root to fetch responses from services for the bundle.
+func NewBundleWithSigningConfig(ctx context.Context, ko options.KeyOpts, cert, certChain string, bundleOpts CommonBundleOpts, signingConfig *root.SigningConfig, trustedMaterial root.TrustedMaterial) ([]byte, sign.Keypair, error) {
+	keypair, _, certBytes, idToken, err := GetKeypairAndToken(ctx, ko, cert, certChain)
+	if err != nil {
+		return nil, nil, fmt.Errorf("getting keypair and token: %w", err)
+	}
+
+	// TODO: Adapt this to PlainData for non-attestation signing
+	content := &sign.DSSEData{
+		Data:        bundleOpts.Payload,
+		PayloadType: "application/vnd.in-toto+json",
+	}
+
+	var tsaClientTransport http.RoundTripper
+	if ko.TSAClientCACert != "" || (ko.TSAClientCert != "" && ko.TSAClientKey != "") {
+		tsaClientTransport, err = client.GetHTTPTransport(ko.TSAClientCACert, ko.TSAClientCert, ko.TSAClientKey, ko.TSAServerName, 30*time.Second)
+		if err != nil {
+			return nil, nil, fmt.Errorf("getting TSA client transport: %w", err)
+		}
+	}
+	signOpts := cbundle.SignOptions{TSAClientTransport: tsaClientTransport}
+
+	bundle, err := cbundle.SignData(ctx, content, keypair, idToken, certBytes, signingConfig, trustedMaterial, signOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("signing bundle: %w", err)
+	}
+	return bundle, keypair, nil
+}
+
 type bundleComponents struct {
 	SV               *SignerVerifier
 	SignedPayload    []byte
@@ -718,7 +747,7 @@ func LoadTrustedMaterialAndSigningConfig(ctx context.Context, ko *options.KeyOpt
 	return nil
 }
 
-func ExtractElementsFromProtoBundle(bundle *protobundle.Bundle) ([]byte, *pb_go_v1.X509Certificate, *protorekor.TransparencyLogEntry, *pb_go_v1.RFC3161SignedTimestamp, error) {
+func ExtractElementsFromProtoBundle(bundle *protobundle.Bundle) ([]byte, []*pb_go_v1.X509Certificate, *protorekor.TransparencyLogEntry, *pb_go_v1.RFC3161SignedTimestamp, error) {
 	if bundle == nil {
 		return nil, nil, nil, nil, fmt.Errorf("bundle is nil")
 	}
@@ -738,14 +767,14 @@ func ExtractElementsFromProtoBundle(bundle *protobundle.Bundle) ([]byte, *pb_go_
 		return nil, nil, nil, nil, fmt.Errorf("bundle does not contain a message signature or dsse envelope")
 	}
 
-	var extractedCert *pb_go_v1.X509Certificate
+	var extractedCerts []*pb_go_v1.X509Certificate
 	var rekorEntry *protorekor.TransparencyLogEntry
 	var timestamp *pb_go_v1.RFC3161SignedTimestamp
 	if vm := bundle.GetVerificationMaterial(); vm != nil {
 		if chain := vm.GetX509CertificateChain(); chain != nil && len(chain.GetCertificates()) > 0 {
-			extractedCert = chain.GetCertificates()[0]
+			extractedCerts = chain.GetCertificates()
 		} else if cert := vm.GetCertificate(); cert != nil {
-			extractedCert = cert
+			extractedCerts = []*pb_go_v1.X509Certificate{cert}
 		}
 		if tlogEntries := vm.GetTlogEntries(); len(tlogEntries) > 0 {
 			rekorEntry = tlogEntries[0]
@@ -757,7 +786,7 @@ func ExtractElementsFromProtoBundle(bundle *protobundle.Bundle) ([]byte, *pb_go_
 		}
 	}
 
-	return sig, extractedCert, rekorEntry, timestamp, nil
+	return sig, extractedCerts, rekorEntry, timestamp, nil
 }
 
 func NewLegacyBundleFromProtoBundleElements(sig []byte, cert *pb_go_v1.X509Certificate, pubKey []byte, rekorEntry *protorekor.TransparencyLogEntry) ([]byte, error) {

@@ -36,6 +36,7 @@ import (
 	"github.com/sigstore/cosign/v3/internal/ui"
 	cbundle "github.com/sigstore/cosign/v3/pkg/cosign/bundle"
 	protobundle "github.com/sigstore/protobuf-specs/gen/pb-go/bundle/v1"
+	pb_go_v1 "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
 	"github.com/sigstore/sigstore-go/pkg/sign"
 	"github.com/sigstore/sigstore/pkg/signature"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -129,9 +130,13 @@ func SignBlobCmd(ctx context.Context, ro *options.RootOptions, ko options.KeyOpt
 		return nil, fmt.Errorf("unmarshalling bundle: %w", err)
 	}
 
-	sig, extractedCert, rekorEntry, rfc3161Timestamp, err := signcommon.ExtractElementsFromProtoBundle(&bundle)
+	sig, extractedCerts, rekorEntry, rfc3161Timestamp, err := signcommon.ExtractElementsFromProtoBundle(&bundle)
 	if err != nil {
 		return nil, fmt.Errorf("extracting elements from bundle: %w", err)
+	}
+	var extractedCert *pb_go_v1.X509Certificate
+	if len(extractedCerts) > 0 {
+		extractedCert = extractedCerts[0]
 	}
 
 	if ko.BundlePath != "" {

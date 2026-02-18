@@ -196,21 +196,24 @@ func signDigestBundle(ctx context.Context, digest name.Digest, ko options.KeyOpt
 		OCIRemoteOpts: ociremoteOpts,
 	}
 
-	if ko.SigningConfig != nil {
-		_, err := signcommon.WriteNewBundleWithSigningConfig(ctx, ko, signOpts.Cert, signOpts.CertChain, bundleOpts, ko.SigningConfig, ko.TrustedMaterial)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-
-	bundleComponents, closeSV, err := signcommon.GetBundleComponents(ctx, signOpts.Cert, signOpts.CertChain, ko, false, signOpts.TlogUpload, payload, digest, "dsse")
+	shouldUpload, err := signcommon.ShouldUploadToTlog(ctx, ko, digest, signOpts.TlogUpload)
 	if err != nil {
-		return fmt.Errorf("getting bundle components: %w", err)
+		return fmt.Errorf("should upload to tlog: %w", err)
 	}
-	defer closeSV()
 
-	return signcommon.WriteBundle(ctx, bundleComponents.SV, bundleComponents.RekorEntry, bundleOpts, bundleComponents.SignedPayload, bundleComponents.SignerBytes, bundleComponents.TimestampBytes)
+	if ko.SigningConfig == nil {
+		ko.SigningConfig, err = signcommon.NewSigningConfigFromKeyOpts(ko, shouldUpload)
+		if err != nil {
+			return fmt.Errorf("creating signing config: %w", err)
+		}
+	}
+
+	_, err = signcommon.WriteNewBundleWithSigningConfig(ctx, ko, signOpts.Cert, signOpts.CertChain, bundleOpts, ko.SigningConfig, ko.TrustedMaterial)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func signDigest(ctx context.Context, digest name.Digest, payload []byte, ko options.KeyOpts, signOpts options.SignOptions,

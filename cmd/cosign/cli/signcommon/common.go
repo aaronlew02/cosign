@@ -549,7 +549,6 @@ func WriteNewBundleWithSigningConfig(ctx context.Context, ko options.KeyOpts, ce
 			return nil, fmt.Errorf("creating bundle file: %w", err)
 		}
 		ui.Infof(ctx, "Wrote bundle to file %s", bundleOpts.BundlePath)
-		return bundle, nil
 	}
 	if !bundleOpts.Upload {
 		return bundle, nil

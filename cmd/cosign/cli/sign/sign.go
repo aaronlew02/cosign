@@ -257,13 +257,6 @@ func signDigest(ctx context.Context, digest name.Digest, payload []byte, ko opti
 		}
 	}
 
-	if ko.TrustedMaterial == nil {
-		ko.TrustedMaterial, err = cosign.TrustedRoot()
-		if err != nil {
-			return err
-		}
-	}
-
 	keypair, _, certBytes, idToken, err := signcommon.GetKeypairAndToken(ctx, ko, signOpts.Cert, signOpts.CertChain)
 	if err != nil {
 		return fmt.Errorf("getting keypair and token: %w", err)

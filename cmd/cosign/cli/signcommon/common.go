@@ -49,7 +49,6 @@ import (
 	"github.com/sigstore/cosign/v3/pkg/cosign/pkcs11key"
 	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
 	sigs "github.com/sigstore/cosign/v3/pkg/signature"
-	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/sigstore/cosign/v3/pkg/types"
 	protobundle "github.com/sigstore/protobuf-specs/gen/pb-go/bundle/v1"
@@ -754,7 +753,7 @@ func ExtractElementsFromProtoBundle(bundle *protobundle.Bundle) ([]byte, []*pb_g
 	var sig []byte
 	if dsseEnv := bundle.GetDsseEnvelope(); dsseEnv != nil {
 		var err error
-		sig, err = protojson.Marshal(dsseEnv)
+		sig, err = json.Marshal(dsseEnv)
 		if err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("marshalling dsse envelope: %w", err)
 		}

@@ -26,6 +26,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -586,7 +587,7 @@ func TestVerifyBlob(t *testing.T) {
 	for _, tt := range tts {
 		t.Run(tt.name, func(t *testing.T) {
 			tt := tt
-			entries := make([]models.LogEntry, 0)
+			entries := make([]models.LogEntry, 0, len(tt.rekorEntry))
 			for _, entry := range tt.rekorEntry {
 				entries = append(entries, *entry)
 			}
@@ -630,6 +631,7 @@ func TestVerifyBlob(t *testing.T) {
 			if tt.key != nil {
 				keyPath := writeBlobFile(t, td, string(tt.key), "key.pem")
 				cmd.KeyRef = keyPath
+				cmd.CertVerifyOptions = options.CertVerifyOptions{}
 			}
 			if tt.newBundle {
 				cmd.TrustedRootPath = writeTrustedRootFile(t, td, "{\"mediaType\":\"application/vnd.dev.sigstore.trustedroot+json;version=0.1\"}")
@@ -661,17 +663,88 @@ func TestVerifyBlobCertMissingSubject(t *testing.T) {
 	}
 }
 
-func TestVerifyBlobCertMissingIssuer(t *testing.T) {
+func TestVerifyBlobMutuallyExclusiveFlags(t *testing.T) {
 	ctx := context.Background()
-	verifyBlob := VerifyBlobCmd{
-		CertRef: "cert.pem",
-		CertVerifyOptions: options.CertVerifyOptions{
-			CertIdentity: "subject",
+	tts := []struct {
+		name          string
+		cmd           VerifyBlobCmd
+		expectedError error
+	}{
+		{
+			name: "both key and cert identity",
+			cmd: VerifyBlobCmd{
+				KeyOpts: options.KeyOpts{
+					KeyRef:     "key.pub",
+					BundlePath: "bundle.sigstore.json",
+				},
+				CertVerifyOptions: options.CertVerifyOptions{
+					CertIdentity: "hello@foo.com",
+				},
+			},
+			expectedError: &options.KeyAndIdentityParseError{},
+		},
+		{
+			name: "both key and cert identity regex",
+			cmd: VerifyBlobCmd{
+				KeyOpts: options.KeyOpts{
+					KeyRef:     "key.pub",
+					BundlePath: "bundle.sigstore.json",
+				},
+				CertVerifyOptions: options.CertVerifyOptions{
+					CertIdentityRegexp: "^.*@foo.com$",
+				},
+			},
+			expectedError: &options.KeyAndIdentityParseError{},
+		},
+		{
+			name: "both cert identity and cert identity regex",
+			cmd: VerifyBlobCmd{
+				KeyOpts: options.KeyOpts{
+					BundlePath: "bundle.sigstore.json",
+				},
+				CertVerifyOptions: options.CertVerifyOptions{
+					CertIdentity:       "hello@foo.com",
+					CertIdentityRegexp: "^.*@foo.com$",
+				},
+			},
+			expectedError: &options.KeyAndIdentityParseError{},
+		},
+		{
+			name: "both key and secret key",
+			cmd: VerifyBlobCmd{
+				KeyOpts: options.KeyOpts{
+					KeyRef: "key.pub",
+					Sk:     true,
+				},
+			},
+			expectedError: &options.PubKeyParseError{},
 		},
 	}
+
+	for _, tt := range tts {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cmd.Exec(ctx, "foo")
+			if !errors.Is(err, tt.expectedError) {
+				t.Fatalf("expected %T, got: %T, %v", tt.expectedError, err, err)
+			}
+		})
+	}
+}
+
+func TestVerifyBlobKeyAndCertIdentity(t *testing.T) {
+	ctx := context.Background()
+	verifyBlob := VerifyBlobCmd{
+		KeyOpts: options.KeyOpts{
+			KeyRef: "key.pub",
+		},
+		CertVerifyOptions: options.CertVerifyOptions{
+			CertIdentity: "hello@foo.com",
+		},
+	}
+	var expectedErr *options.KeyAndIdentityParseError
 	err := verifyBlob.Exec(ctx, "blob")
-	if err == nil {
-		t.Fatalf("verifyBlob() expected '--certificate-oidc-issuer required'")
+	if !errors.As(err, &expectedErr) {
+		t.Fatalf("expected KeyAndIdentityParseError, got: %T, %v", err, err)
 	}
 }
 
@@ -1468,7 +1541,7 @@ func (s *keylessStack) genLeafCert(t *testing.T, subject string, issuer string) 
 }
 
 func (s *keylessStack) genChainFile(t *testing.T) {
-	var chain []byte
+	chain := make([]byte, 0, len(s.subPemCert)+len(s.rootPemCert))
 	chain = append(chain, s.subPemCert...)
 	chain = append(chain, s.rootPemCert...)
 	tmpChainFile, err := os.CreateTemp(s.td, "cosign_fulcio_chain_*.cert")

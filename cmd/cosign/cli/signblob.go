@@ -76,6 +76,12 @@ func SignBlob() *cobra.Command {
 					o.SigningAlgorithm, strings.Join(supportedAlgorithms, ", "))
 			}
 
+			if o.BundlePath == "" {
+				if o.NewBundleFormat {
+					return fmt.Errorf("--bundle is required when using the new bundle format")
+				}
+			}
+
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {

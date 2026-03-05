@@ -15,6 +15,8 @@
 package cli
 
 import (
+	"fmt"
+
 	"github.com/sigstore/cosign/v3/cmd/cosign/cli/attest"
 	"github.com/sigstore/cosign/v3/cmd/cosign/cli/generate"
 	"github.com/sigstore/cosign/v3/cmd/cosign/cli/options"
@@ -49,10 +51,18 @@ func AttestBlob() *cobra.Command {
   echo <PAYLOAD> | cosign attest-blob --predicate - --yes`,
 
 		PersistentPreRun: options.BindViper,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if o.Predicate.Statement == "" && len(args) != 1 {
 				return cobra.ExactArgs(1)(cmd, args)
 			}
+			if o.BundlePath == "" {
+				if o.NewBundleFormat {
+					return fmt.Errorf("--bundle is required when using the new bundle format")
+				}
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
 			oidcClientSecret, err := o.OIDC.ClientSecret()
 			if err != nil {
 				return err

@@ -17,6 +17,7 @@ package bundle
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -122,6 +123,15 @@ func upgradeBundle(ctx context.Context, data []byte, rekorClient *client.Rekor) 
 	if chainContent, ok := bundle.VerificationMaterial.Content.(*protobundle.VerificationMaterial_X509CertificateChain); ok {
 		certChain := chainContent.X509CertificateChain.Certificates
 		if len(certChain) > 0 {
+			ui.Infof(ctx, "Truncating certificate chain to only the leaf certificate...")
+			for i, cert := range certChain {
+				parsedCert, err := x509.ParseCertificate(cert.RawBytes)
+				if err != nil {
+					ui.Infof(ctx, "  Certificate %d: <unable to parse: %v>", i, err)
+					continue
+				}
+				ui.Infof(ctx, "  Certificate %d Subject: %s", i, parsedCert.Subject.String())
+			}
 			bundle.VerificationMaterial.Content = &protobundle.VerificationMaterial_Certificate{
 				Certificate: certChain[0],
 			}

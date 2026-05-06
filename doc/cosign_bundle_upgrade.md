@@ -17,7 +17,7 @@ cosign bundle upgrade [flags]
       --in string          path to the bundle file to upgrade
       --in-place string    path to the bundle file to upgrade in place
       --out string         path to the output upgraded bundle file
-      --rekor-url string   address of rekor STL server (default "https://rekor.sigstore.dev")
+      --rekor-url string   URL of the transparency log (default "https://rekor.sigstore.dev")
 ```
 
 ### Options inherited from parent commands

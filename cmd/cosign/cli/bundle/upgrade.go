@@ -18,7 +18,6 @@ package bundle
 import (
 	"context"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -50,10 +49,6 @@ func (c *UpgradeCmd) Exec(ctx context.Context) error {
 		return fmt.Errorf("reading input file: %w", err)
 	}
 
-	if err := detectFormat(data); err != nil {
-		return fmt.Errorf("detecting bundle format: %w", err)
-	}
-
 	rekorClient, err := rekor.GetRekorClient(c.RekorURL)
 	if err != nil {
 		return fmt.Errorf("creating rekor client: %w", err)
@@ -76,23 +71,6 @@ func (c *UpgradeCmd) Exec(ctx context.Context) error {
 
 	ui.Infof(ctx, "Successfully upgraded bundle written to %s", outputPath)
 	return nil
-}
-
-func detectFormat(data []byte) error {
-	var m map[string]interface{}
-	if err := json.Unmarshal(data, &m); err != nil {
-		return fmt.Errorf("unmarshaling JSON for detection: %w", err)
-	}
-
-	if _, hasMediaType := m["mediaType"]; hasMediaType {
-		return nil
-	}
-
-	if _, hasBase64Signature := m["base64Signature"]; hasBase64Signature {
-		return fmt.Errorf("cannot upgrade legacy bundles; use `cosign bundle create` to create a new bundle from your legacy bundle and artifact")
-	}
-
-	return fmt.Errorf("unrecognized bundle format")
 }
 
 func upgradeBundle(ctx context.Context, data []byte, rekorClient *client.Rekor) ([]byte, error) {

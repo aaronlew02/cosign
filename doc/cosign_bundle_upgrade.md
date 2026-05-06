@@ -4,7 +4,7 @@ Upgrade a Sigstore protobuf bundle
 
 ### Synopsis
 
-Upgrade a Sigstore protobuf bundle to the latest version
+Upgrade a Sigstore Protobuf bundle to the latest version. This command only supports standardized bundles.
 
 ```
 cosign bundle upgrade [flags]

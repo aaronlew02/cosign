@@ -77,7 +77,7 @@ func bundleUpgrade() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "upgrade",
 		Short: "Upgrade a Sigstore protobuf bundle",
-		Long:  "Upgrade a Sigstore protobuf bundle to the latest version",
+		Long:  "Upgrade a Sigstore Protobuf bundle to the latest version. This command only supports standardized bundles.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if o.InPlace == "" && (o.In == "" || o.Out == "") {
 				return fmt.Errorf("must specify both --in and --out, or use --in-place")

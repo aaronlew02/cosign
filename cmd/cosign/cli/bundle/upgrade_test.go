@@ -20,62 +20,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/sigstore/rekor/pkg/generated/client"
 	"github.com/sigstore/rekor/pkg/generated/client/entries"
 	"github.com/sigstore/rekor/pkg/generated/models"
 )
-
-func TestDetectFormat(t *testing.T) {
-	tests := []struct {
-		name        string
-		input       string
-		expectError bool
-		errorMsg    string
-	}{
-		{
-			name:        "New Format",
-			input:       `{"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json"}`,
-			expectError: false,
-		},
-		{
-			name:        "Old Format",
-			input:       `{"base64Signature": "ey..."}`,
-			expectError: true,
-			errorMsg:    "cannot upgrade legacy bundles",
-		},
-		{
-			name:        "Unrecognized Format",
-			input:       `{"foo": "bar"}`,
-			expectError: true,
-			errorMsg:    "unrecognized bundle format",
-		},
-		{
-			name:        "Invalid JSON",
-			input:       `{invalid}`,
-			expectError: true,
-			errorMsg:    "unmarshaling JSON for detection",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := detectFormat([]byte(tc.input))
-			if tc.expectError {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				if tc.errorMsg != "" && !strings.Contains(err.Error(), tc.errorMsg) {
-					t.Fatalf("expected error containing %q, got %q", tc.errorMsg, err.Error())
-				}
-			} else if err != nil {
-				t.Fatalf("expected no error, got %v", err)
-			}
-		})
-	}
-}
 
 type mockEntriesClient struct {
 	entries.ClientService

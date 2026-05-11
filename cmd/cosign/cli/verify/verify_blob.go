@@ -347,3 +347,8 @@ func payloadDigest(blobRef string) (string, []byte, error) {
 	}
 	return hexAlg, digestBytes, nil
 }
+
+func assembleBundleFromLegacyInputs(blobBytes []byte, base64Sig string, cert *x509.Certificate, chainPEM []byte, rfc3161Timestamp []byte, rekorBundle *bundle.RekorBundle) (*sgbundle.Bundle, error) {
+	// TODO: Implement bundle assembly
+	return nil, nil
+}

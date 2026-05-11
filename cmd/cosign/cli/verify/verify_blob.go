@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -28,7 +29,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/sigstore/cosign/v3/cmd/cosign/cli/options"
@@ -40,6 +40,12 @@ import (
 	sigs "github.com/sigstore/cosign/v3/pkg/signature"
 	sgbundle "github.com/sigstore/sigstore-go/pkg/bundle"
 	sgverify "github.com/sigstore/sigstore-go/pkg/verify"
+
+	protobundle "github.com/sigstore/protobuf-specs/gen/pb-go/bundle/v1"
+	protocommon "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
+	protorekor "github.com/sigstore/protobuf-specs/gen/pb-go/rekor/v1"
+	"github.com/sigstore/rekor/pkg/generated/models"
+	"github.com/sigstore/rekor/pkg/tle"
 
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 )
@@ -184,6 +190,7 @@ func (c *VerifyBlobCmd) Exec(ctx context.Context, blobRef string) error {
 	}
 
 	opts := make([]static.Option, 0)
+	var legacyRekorBundle *bundle.RekorBundle
 	if c.BundlePath != "" {
 		b, err := cosign.FetchLocalSignedPayloadFromPath(c.BundlePath)
 		if err != nil {
@@ -216,26 +223,25 @@ func (c *VerifyBlobCmd) Exec(ctx context.Context, blobRef string) error {
 			}
 			cert = bundleCert
 		}
+		legacyRekorBundle = b.Bundle
 		opts = append(opts, static.WithBundle(b.Bundle))
 	}
+	var detachedTimestamp []byte
 	if c.RFC3161TimestampPath != "" {
 		var rfc3161Timestamp bundle.RFC3161Timestamp
 		ts, err := blob.LoadFileOrURL(c.RFC3161TimestampPath)
 		if err != nil {
 			return err
 		}
+		detachedTimestamp = ts
 		if err := json.Unmarshal(ts, &rfc3161Timestamp); err != nil {
 			return err
 		}
 		opts = append(opts, static.WithRFC3161Timestamp(&rfc3161Timestamp))
 	}
-	// Set an SCT if provided via the CLI.
+	// Fail immediately if the user provided a detached SCT
 	if c.SCTRef != "" {
-		sct, err := os.ReadFile(filepath.Clean(c.SCTRef))
-		if err != nil {
-			return fmt.Errorf("reading sct from file: %w", err)
-		}
-		co.SCT = sct
+		return fmt.Errorf("detached SCTs are not supported for verification")
 	}
 	// Set a cert chain if provided.
 	var chainPEM []byte
@@ -280,12 +286,15 @@ func (c *VerifyBlobCmd) Exec(ctx context.Context, blobRef string) error {
 	if err != nil {
 		return err
 	}
-	signature, err := static.NewSignature(blobBytes, sig, opts...)
+	sgBundle, err := assembleBundleFromLegacyInputs(blobBytes, sig, cert, chainPEM, detachedTimestamp, legacyRekorBundle)
 	if err != nil {
-		return err
+		return fmt.Errorf("assembling in-memory bundle: %w", err)
 	}
-	if _, err = cosign.VerifyBlobSignature(ctx, signature, co); err != nil {
-		return err
+
+	artifactPolicyOption := sgverify.WithArtifact(bytes.NewReader(blobBytes))
+	_, err = cosign.VerifyNewBundle(ctx, co, artifactPolicyOption, sgBundle)
+	if err != nil {
+		return fmt.Errorf("verifying new bundle: %w", err)
 	}
 
 	ui.Infof(ctx, "Verified OK")
@@ -349,6 +358,90 @@ func payloadDigest(blobRef string) (string, []byte, error) {
 }
 
 func assembleBundleFromLegacyInputs(blobBytes []byte, base64Sig string, cert *x509.Certificate, chainPEM []byte, rfc3161Timestamp []byte, rekorBundle *bundle.RekorBundle) (*sgbundle.Bundle, error) {
-	// TODO: Implement bundle assembly
-	return nil, nil
+	sigBytes, err := base64.StdEncoding.DecodeString(base64Sig)
+	if err != nil {
+		return nil, fmt.Errorf("decoding base64 signature: %w", err)
+	}
+
+	digest := sha256.Sum256(blobBytes)
+
+	pb := &protobundle.Bundle{
+		MediaType:            "application/vnd.dev.sigstore.bundle+json;version=0.3",
+		VerificationMaterial: &protobundle.VerificationMaterial{},
+	}
+	pb.Content = &protobundle.Bundle_MessageSignature{
+		MessageSignature: &protocommon.MessageSignature{
+			MessageDigest: &protocommon.HashOutput{
+				Algorithm: protocommon.HashAlgorithm_SHA2_256,
+				Digest:    digest[:],
+			},
+			Signature: sigBytes,
+		},
+	}
+
+	var certs []*protocommon.X509Certificate
+	if cert != nil {
+		certs = append(certs, &protocommon.X509Certificate{
+			RawBytes: cert.Raw,
+		})
+	}
+
+	var chainCerts []*x509.Certificate
+	if len(chainPEM) > 0 {
+		var err error
+		chainCerts, err = cryptoutils.UnmarshalCertificatesFromPEM(chainPEM)
+		if err != nil {
+			return nil, fmt.Errorf("unmarshaling cert chain: %w", err)
+		}
+		for _, c := range chainCerts {
+			certs = append(certs, &protocommon.X509Certificate{
+				RawBytes: c.Raw,
+			})
+		}
+	}
+
+	if len(chainCerts) > 0 && cert != nil {
+		pb.VerificationMaterial.Content = &protobundle.VerificationMaterial_X509CertificateChain{
+			X509CertificateChain: &protocommon.X509CertificateChain{
+				Certificates: certs,
+			},
+		}
+	} else if cert != nil {
+		pb.VerificationMaterial.Content = &protobundle.VerificationMaterial_Certificate{
+			Certificate: &protocommon.X509Certificate{
+				RawBytes: cert.Raw,
+			},
+		}
+	}
+
+	if rekorBundle != nil {
+		entry := &models.LogEntryAnon{
+			Body:           rekorBundle.Payload.Body,
+			IntegratedTime: &rekorBundle.Payload.IntegratedTime,
+			LogIndex:       &rekorBundle.Payload.LogIndex,
+			LogID:          &rekorBundle.Payload.LogID,
+			Verification: &models.LogEntryAnonVerification{
+				SignedEntryTimestamp: rekorBundle.SignedEntryTimestamp,
+			},
+		}
+
+		tlogEntry, err := tle.GenerateTransparencyLogEntry(*entry)
+		if err != nil {
+			return nil, fmt.Errorf("generating transparency log entry: %w", err)
+		}
+
+		pb.VerificationMaterial.TlogEntries = []*protorekor.TransparencyLogEntry{tlogEntry}
+	}
+
+	if len(rfc3161Timestamp) > 0 {
+		ts := &protocommon.RFC3161SignedTimestamp{
+			SignedTimestamp: rfc3161Timestamp,
+		}
+
+		pb.VerificationMaterial.TimestampVerificationData = &protobundle.TimestampVerificationData{
+			Rfc3161Timestamps: []*protocommon.RFC3161SignedTimestamp{ts},
+		}
+	}
+
+	return sgbundle.NewBundle(pb)
 }

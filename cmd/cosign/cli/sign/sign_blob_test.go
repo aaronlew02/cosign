@@ -28,6 +28,7 @@ import (
 
 	"github.com/secure-systems-lab/go-securesystemslib/encrypted"
 	"github.com/sigstore/cosign/v3/cmd/cosign/cli/options"
+	"github.com/sigstore/cosign/v3/cmd/cosign/cli/signcommon"
 	"github.com/sigstore/cosign/v3/internal/test"
 	"github.com/sigstore/cosign/v3/pkg/cosign"
 	"github.com/sigstore/sigstore-go/pkg/root"
@@ -95,6 +96,7 @@ func TestSignBlobCmd(t *testing.T) {
 	// Test signing using Ed25519 key with custom signing config and no transparency log upload
 	edKeyRef := writeFile(t, td, string(pemBytes), "ed_key.pem")
 	keyOpts = options.KeyOpts{KeyRef: edKeyRef, BundlePath: bundlePath}
+	keyOpts.SigningConfig = signcommon.NewEmptySigningConfig()
 	sc, err := root.NewSigningConfig(
 		root.SigningConfigMediaType02,
 		nil,

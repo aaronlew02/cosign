@@ -61,8 +61,8 @@ type VerifyBlobAttestationCommand struct {
 
 	UseSignedTimestamps bool
 
-	Digest        string
-	DigestAlg     string
+	Digest    string
+	DigestAlg string
 }
 
 // Exec runs the verification command

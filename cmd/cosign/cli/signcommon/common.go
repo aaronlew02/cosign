@@ -468,18 +468,30 @@ func ParseSignatureAlgorithmFlag(signingAlgorithm string) (pb_go_v1.PublicKeyDet
 }
 
 // LoadTrustedMaterialAndSigningConfig loads the trusted material and signing config from the given options.
-func LoadTrustedMaterialAndSigningConfig(ctx context.Context, ko *options.KeyOpts, useSigningConfig bool, signingConfigPath string,
+func LoadTrustedMaterialAndSigningConfig(ctx context.Context, ko *options.KeyOpts, offline bool, useSigningConfig bool, signingConfigPath string,
 	rekorURL, fulcioURL, oidcIssuer, tsaServerURL, trustedRootPath string,
 	tlogUpload bool, newBundleFormat bool, bundlePath string, keyRef string, issueCertificate bool,
 	output, outputAttestation, outputCertificate, outputPayload, outputSignature, outputTimestamp string) error {
 	var err error
-	// If a signing config is used, then service URLs cannot be specified
-	if (useSigningConfig || signingConfigPath != "") &&
-		((rekorURL != "" && rekorURL != options.DefaultRekorURL) ||
-			(fulcioURL != "" && fulcioURL != options.DefaultFulcioURL) ||
-			(oidcIssuer != "" && oidcIssuer != options.DefaultOIDCIssuerURL) ||
-			tsaServerURL != "") {
-		return fmt.Errorf("cannot specify service URLs and use signing config")
+	serviceURLsSpecified := (rekorURL != "" && rekorURL != options.DefaultRekorURL) ||
+		(fulcioURL != "" && fulcioURL != options.DefaultFulcioURL) ||
+		(oidcIssuer != "" && oidcIssuer != options.DefaultOIDCIssuerURL) ||
+		tsaServerURL != ""
+	if offline {
+		if keyRef == "" {
+			return fmt.Errorf("offline signing requires a private key")
+		}
+		if issueCertificate {
+			return fmt.Errorf("cannot issue certificate when offline")
+		}
+		if serviceURLsSpecified {
+			return fmt.Errorf("cannot specify service URLs when signing offline")
+		}
+		ko.SigningConfig = NewEmptySigningConfig()
+		return nil
+	}
+	if (useSigningConfig || signingConfigPath != "") && serviceURLsSpecified {
+		return fmt.Errorf("cannot specify service URLs when using a signing config")
 	}
 	if (useSigningConfig || signingConfigPath != "") && !tlogUpload {
 		return fmt.Errorf("--tlog-upload=false is not supported with --signing-config or --use-signing-config. Provide a signing config with --signing-config without a transparency log service, which can be created with `cosign signing-config create` or `curl https://raw.githubusercontent.com/sigstore/root-signing/refs/heads/main/targets/signing_config.v0.2.json | jq 'del(.rekorTlogUrls)'` for the public instance")
@@ -640,6 +652,17 @@ func NewLegacyBundleFromProtoBundleComponents(bc *BundleComponents) ([]byte, err
 	}
 
 	return json.Marshal(signedPayload)
+}
+
+// NewEmptySigningConfig returns a signing config with no services configured.
+func NewEmptySigningConfig() *root.SigningConfig {
+	sc, _ := root.NewSigningConfig(
+		root.SigningConfigMediaType02,
+		nil, nil, nil,
+		root.ServiceConfiguration{},
+		nil, root.ServiceConfiguration{},
+	)
+	return sc
 }
 
 // NewSigningConfigFromKeyOpts creates a signing config from key options.

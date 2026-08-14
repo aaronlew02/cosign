@@ -1944,7 +1944,7 @@ func TestSignVerifyBundleOffline(t *testing.T) {
 	so := options.SignOptions{
 		Upload:          true,
 		NewBundleFormat: true,
-		TlogUpload:      false,
+		Offline:         true,
 	}
 	must(sign.SignCmd(ctx, ro, ko, so, []string{imgName}), t)
 

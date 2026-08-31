@@ -416,34 +416,11 @@ func loadCertChainFromFileOrURL(path string) ([]*x509.Certificate, error) {
 	return certs, nil
 }
 
-func keylessVerification(keyRef string, sk bool) bool {
-	if keyRef != "" {
-		return false
-	}
-	if sk {
-		return false
-	}
-	return true
-}
-
-func shouldVerifySCT(ignoreSCT bool, keyRef string, sk bool) bool {
-	if keyRef != "" {
-		return false
-	}
-	if sk {
-		return false
-	}
-	if ignoreSCT {
-		return false
-	}
-	return true
-}
-
 // No trusted root is needed if verification doesn't require Rekor or
 // signed timestamps, and a key is explicitly provided instead of using
-// a Fulcio certificate either via a key or certificate reference or security key.
-func verifyOfflineWithKey(keyRef, certRef string, sk bool, co *cosign.CheckOpts) bool {
-	return (keyRef != "" || certRef != "" || sk) && co.IgnoreTlog && !co.UseSignedTimestamps
+// a Fulcio certificate either via a key or security key.
+func verifyOfflineWithKey(keyRef string, sk bool, co *cosign.CheckOpts) bool {
+	return (keyRef != "" || sk) && co.IgnoreTlog && !co.UseSignedTimestamps
 }
 
 // loadCertsKeylessVerification loads certificates provided as a certificate chain or CA roots + CA intermediate

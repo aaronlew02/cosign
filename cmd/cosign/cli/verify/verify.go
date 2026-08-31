@@ -115,7 +115,7 @@ func (c *VerifyCommand) Exec(ctx context.Context, images []string) (err error) {
 		AllowCertificateChain:        c.AllowCertificateChain || c.CommonVerifyOptions.AllowCertificateChain,
 		NewBundleFormat:              true,
 	}
-	vOfflineKey := verifyOfflineWithKey(c.KeyRef, "", c.Sk, co)
+	vOfflineKey := verifyOfflineWithKey(c.KeyRef, c.Sk, co)
 
 	err = SetTrustedMaterial(ctx, c.TrustedRootPath, "", "", "", "", vOfflineKey, co)
 	if err != nil {

@@ -87,7 +87,7 @@ func (c *VerifyBlobCmd) Exec(ctx context.Context, blobRef string) error {
 		UseSignedTimestamps:          c.UseSignedTimestamps,
 		AllowCertificateChain:        c.AllowCertificateChain,
 	}
-	vOfflineKey := verifyOfflineWithKey(c.KeyRef, "", c.Sk, co)
+	vOfflineKey := verifyOfflineWithKey(c.KeyRef, c.Sk, co)
 
 	// User provides a key. Otherwise, verification requires a Fulcio certificate
 	// provided in an attached bundle.
